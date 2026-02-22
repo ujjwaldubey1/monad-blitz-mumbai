@@ -1,0 +1,11 @@
+{
+  "network": "monadTestnet",
+  "chainId": 10143,
+  "deployer": "0x2ECAcAefe20d8bA49FDA8BC099fc58eBDFF6F3a2",
+  "contracts": {
+    "ReputationNFT": "0x04951f27C2522d94C5FbFa51415A50603b1c7d70",
+    "MicroWorkEscrow": "0xbcce751bE9026B62Fd7B58686a7aa89c66c155f1",
+    "MicroLoan": "0x5ba59BcCCba4eB7cc05a2c525b19a6c74D58b806"
+  },
+  "deployedAt": "2026-02-22T10:30:28.313Z"
+}
