@@ -2,19 +2,21 @@
 pragma solidity ^0.8.24;
 
 import "./interfaces/IReputationNFT.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title MicroLoan
  * @dev Reputation-backed micro-lending for gig workers.
  *      Workers with 5+ completed jobs can borrow against their reputation.
- *      Loan: 0.01 ether, repayment: 0.011 ether (10% fee), duration: 7 days.
+ *      Dynamic Loan Tiers:
+ *      5-19 jobs: 0.01 ether (10% fee)
+ *      20-49 jobs: 0.05 ether (8% fee)
+ *      50+ jobs: 0.10 ether (5% fee)
  *      One active loan per worker at a time.
  *      Anyone can fund the lending pool via receive().
  */
-contract MicroLoan {
+contract MicroLoan is ReentrancyGuard {
     // ---- Constants ----
-    uint256 public constant LOAN_AMOUNT = 0.01 ether;
-    uint256 public constant REPAYMENT_AMOUNT = 0.011 ether;
     uint256 public constant LOAN_DURATION = 7 days;
     uint256 public constant MIN_JOBS_REQUIRED = 5;
 
@@ -45,32 +47,49 @@ contract MicroLoan {
         reputationNFT = IReputationNFT(_reputationNFT);
     }
 
+    // ---- Internals ----
+    function getLoanTerms(uint256 jobCount) public pure returns (uint256 loanAmount, uint256 repaymentAmount) {
+        // Tier 1: 5-19 jobs -> 0.01 MON loan, 10% fee
+        // Tier 2: 20-49 jobs -> 0.05 MON loan, 8% fee
+        // Tier 3: 50+ jobs -> 0.10 MON loan, 5% fee
+        
+        if (jobCount >= 50) {
+            return (0.10 ether, 0.105 ether); // 5% fee
+        } else if (jobCount >= 20) {
+            return (0.05 ether, 0.054 ether); // 8% fee
+        } else {
+            return (0.01 ether, 0.011 ether); // 10% fee
+        }
+    }
+
     // ---- Core ----
 
-    /// @notice Borrow a micro-loan. Requires 5+ completed jobs and no active loan.
-    function borrow() external {
+    /// @notice Borrow a micro-loan based on reputation tier.
+    function borrow() external nonReentrant {
         uint256 jobCount = reputationNFT.workerJobCount(msg.sender);
         require(jobCount >= MIN_JOBS_REQUIRED, "MicroLoan: need 5+ completed jobs");
         require(!loans[msg.sender].active, "MicroLoan: existing loan still active");
-        require(address(this).balance >= LOAN_AMOUNT, "MicroLoan: pool insufficient");
+        
+        (uint256 loanAmount, uint256 repaymentAmount) = getLoanTerms(jobCount);
+        require(address(this).balance >= loanAmount, "MicroLoan: pool insufficient");
 
         uint256 dueDate = block.timestamp + LOAN_DURATION;
         loans[msg.sender] = Loan({
-            amount: LOAN_AMOUNT,
-            repaymentAmount: REPAYMENT_AMOUNT,
+            amount: loanAmount,
+            repaymentAmount: repaymentAmount,
             dueDate: dueDate,
             active: true,
             repaid: false
         });
 
-        (bool sent, ) = msg.sender.call{value: LOAN_AMOUNT}("");
+        (bool sent, ) = msg.sender.call{value: loanAmount}("");
         require(sent, "MicroLoan: transfer failed");
 
-        emit LoanTaken(msg.sender, LOAN_AMOUNT, dueDate);
+        emit LoanTaken(msg.sender, loanAmount, dueDate);
     }
 
     /// @notice Repay an active loan. Must send exactly the repayment amount.
-    function repay() external payable {
+    function repay() external payable nonReentrant {
         Loan storage loan = loans[msg.sender];
         require(loan.active, "MicroLoan: no active loan");
         require(msg.value >= loan.repaymentAmount, "MicroLoan: insufficient repayment");

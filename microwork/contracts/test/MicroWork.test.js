@@ -1,89 +1,76 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("MicroWork", function () {
-    let microWork;
-    let owner, employer, worker;
+describe("MicroWorkEscrow", function () {
+    let escrow;
+    let owner, client, worker, arbiter;
 
     beforeEach(async function () {
-        [owner, employer, worker] = await ethers.getSigners();
-        const MicroWork = await ethers.getContractFactory("MicroWork");
-        microWork = await MicroWork.deploy();
+        [owner, client, worker, arbiter] = await ethers.getSigners();
+        const MicroWorkEscrow = await ethers.getContractFactory("MicroWorkEscrow");
+        escrow = await MicroWorkEscrow.deploy();
+        await escrow.waitForDeployment();
+        await escrow.setArbiter(arbiter.address);
     });
 
-    describe("Task Creation", function () {
-        it("Should create a task with escrow payment", async function () {
+    describe("Job Creation", function () {
+        it("Should create a job with escrow payment", async function () {
             const payment = ethers.parseEther("0.1");
             await expect(
-                microWork.connect(employer).createTask("Fix a bug", { value: payment })
-            ).to.emit(microWork, "TaskCreated");
+                escrow.connect(client).createJob("Fix a bug", { value: payment })
+            ).to.emit(escrow, "JobCreated");
 
-            const task = await microWork.getTask(0);
-            expect(task.employer).to.equal(employer.address);
-            expect(task.payment).to.equal(payment);
-            expect(task.status).to.equal(0); // Open
-        });
-
-        it("Should reject task creation with 0 payment", async function () {
-            await expect(
-                microWork.connect(employer).createTask("Free work", { value: 0 })
-            ).to.be.revertedWith("Payment must be greater than 0");
+            const job = await escrow.getJob(0);
+            expect(job.client).to.equal(client.address);
+            expect(job.payment).to.equal(payment);
+            expect(job.status).to.equal(0); // Open
         });
     });
 
-    describe("Task Claiming", function () {
+    describe("Job Flow (Pull-over-push)", function () {
         beforeEach(async function () {
-            await microWork
-                .connect(employer)
-                .createTask("Design a logo", { value: ethers.parseEther("0.05") });
+            await escrow.connect(client).createJob("Design a logo", { value: ethers.parseEther("0.05") });
         });
 
-        it("Should let a worker claim an open task", async function () {
-            await expect(microWork.connect(worker).claimTask(0)).to.emit(
-                microWork,
-                "TaskAssigned"
-            );
-        });
+        it("Should allow worker to accept, then both confirm and pull funds", async function () {
+            await escrow.connect(worker).acceptJob(0);
+            await escrow.connect(client).confirmCompletion(0);
+            await escrow.connect(worker).confirmCompletion(0);
 
-        it("Should prevent employer from claiming own task", async function () {
-            await expect(
-                microWork.connect(employer).claimTask(0)
-            ).to.be.revertedWith("Employer cannot claim own task");
+            const balanceEscrow = await escrow.balances(worker.address);
+            expect(balanceEscrow).to.equal(ethers.parseEther("0.05"));
+
+            const workerBalBefore = await ethers.provider.getBalance(worker.address);
+            const tx = await escrow.connect(worker).withdraw();
+            const receipt = await tx.wait();
+            const gasUsed = receipt.gasUsed * receipt.gasPrice;
+            const workerBalAfter = await ethers.provider.getBalance(worker.address);
+
+            // Using BigInt directly avoids floating point issues
+            expect(workerBalAfter + gasUsed - workerBalBefore).to.equal(ethers.parseEther("0.05"));
         });
     });
 
-    describe("Task Completion", function () {
+    describe("Dispute and Arbitration", function () {
         beforeEach(async function () {
-            await microWork
-                .connect(employer)
-                .createTask("Write docs", { value: ethers.parseEther("0.1") });
-            await microWork.connect(worker).claimTask(0);
+            await escrow.connect(client).createJob("Write docs", { value: ethers.parseEther("0.1") });
+            await escrow.connect(worker).acceptJob(0);
         });
 
-        it("Should pay the worker on completion", async function () {
-            const balanceBefore = await ethers.provider.getBalance(worker.address);
-            await microWork.connect(employer).completeTask(0);
-            const balanceAfter = await ethers.provider.getBalance(worker.address);
+        it("Should allow arbitration in favor of worker", async function () {
+            await escrow.connect(client).disputeJob(0);
+            await escrow.connect(arbiter).resolveDispute(0, true);
 
-            expect(balanceAfter).to.be.greaterThan(balanceBefore);
+            const bal = await escrow.balances(worker.address);
+            expect(bal).to.equal(ethers.parseEther("0.1"));
         });
 
-        it("Should increment worker reputation", async function () {
-            await microWork.connect(employer).completeTask(0);
-            expect(await microWork.workerReputation(worker.address)).to.equal(1);
-        });
-    });
+        it("Should allow arbitration in favor of client", async function () {
+            await escrow.connect(worker).disputeJob(0);
+            await escrow.connect(arbiter).resolveDispute(0, false);
 
-    describe("Task Cancellation", function () {
-        it("Should refund employer on cancellation", async function () {
-            const payment = ethers.parseEther("0.1");
-            await microWork.connect(employer).createTask("Cancelled gig", { value: payment });
-
-            const balanceBefore = await ethers.provider.getBalance(employer.address);
-            await microWork.connect(employer).cancelTask(0);
-            const balanceAfter = await ethers.provider.getBalance(employer.address);
-
-            expect(balanceAfter).to.be.greaterThan(balanceBefore);
+            const bal = await escrow.balances(client.address);
+            expect(bal).to.equal(ethers.parseEther("0.1"));
         });
     });
 });
