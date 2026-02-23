@@ -1,12 +1,15 @@
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { Toaster } from 'react-hot-toast';
 import PostJob from './pages/PostJob';
 import WorkerDashboard from './pages/WorkerDashboard';
 import MicroLoan from './pages/MicroLoan';
+import Profile from './pages/Profile';
 
 function App() {
     return (
         <div className="min-h-screen bg-bg-primary pb-20 md:pb-0">
+            <Toaster position="bottom-center" />
             {/* ===== Top Navigation ===== */}
             <nav className="sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-border">
                 <div className="max-w-3xl mx-auto px-5 h-16 flex items-center justify-between">
@@ -30,6 +33,7 @@ function App() {
                     <Route path="/jobs" element={<PostJob />} />
                     <Route path="/dashboard" element={<WorkerDashboard />} />
                     <Route path="/credit" element={<MicroLoan />} />
+                    <Route path="/profile" element={<Profile />} />
                 </Routes>
             </main>
 
@@ -39,6 +43,7 @@ function App() {
                     <TabItem to="/jobs" label="Jobs" icon={<JobsIcon />} />
                     <TabItem to="/dashboard" label="Dashboard" icon={<DashboardIcon />} />
                     <TabItem to="/credit" label="Credit" icon={<CreditIcon />} />
+                    <TabItem to="/profile" label="Profile" icon={<ProfileIcon />} />
                 </div>
             </div>
 
@@ -48,6 +53,7 @@ function App() {
                     <DesktopTab to="/jobs" label="Jobs" />
                     <DesktopTab to="/dashboard" label="Dashboard" />
                     <DesktopTab to="/credit" label="Credit" />
+                    <DesktopTab to="/profile" label="Profile" />
                 </div>
             </div>
         </div>
@@ -113,6 +119,14 @@ function CreditIcon() {
             <rect x="3" y="5" width="14" height="10" rx="2" />
             <path d="M3 9h14" />
             <path d="M7 13h2" />
+        </svg>
+    );
+}
+
+function ProfileIcon() {
+    return (
+        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" width="20" height="20">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
         </svg>
     );
 }

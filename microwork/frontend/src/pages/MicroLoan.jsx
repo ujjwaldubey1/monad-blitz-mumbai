@@ -1,5 +1,7 @@
+import { useEffect } from 'react';
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseEther, formatEther } from 'viem';
+import toast from 'react-hot-toast';
 import {
     MICROLOAN_ADDRESS, MICROLOAN_ABI,
     REPUTATION_NFT_ADDRESS, REPUTATION_NFT_ABI,
@@ -53,6 +55,12 @@ function MicroLoan() {
     const { isLoading: isBorrowConfirming, isSuccess: borrowSuccess } =
         useWaitForTransactionReceipt({ hash: borrowHash });
 
+    useEffect(() => {
+        if (isBorrowConfirming) toast.loading('Processing loan...', { id: 'borrow' });
+        else if (borrowSuccess) toast.success('Loan received!', { id: 'borrow' });
+        else if (borrowError) toast.error(borrowError.shortMessage || 'Failed to borrow', { id: 'borrow' });
+    }, [isBorrowConfirming, borrowSuccess, borrowError]);
+
     // Repay
     const {
         data: repayHash,
@@ -62,6 +70,12 @@ function MicroLoan() {
     } = useWriteContract();
     const { isLoading: isRepayConfirming, isSuccess: repaySuccess } =
         useWaitForTransactionReceipt({ hash: repayHash });
+
+    useEffect(() => {
+        if (isRepayConfirming) toast.loading('Processing repayment...', { id: 'repay' });
+        else if (repaySuccess) toast.success('Loan repaid!', { id: 'repay' });
+        else if (repayError) toast.error(repayError.shortMessage || 'Failed to repay', { id: 'repay' });
+    }, [isRepayConfirming, repaySuccess, repayError]);
 
     const count = jobCount ? Number(jobCount) : 0;
     const required = 5;

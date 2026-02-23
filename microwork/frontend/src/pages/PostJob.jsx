@@ -1,12 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseEther } from 'viem';
+import toast from 'react-hot-toast';
 import { ESCROW_ADDRESS, ESCROW_ABI } from '../constants/contracts';
+import { fetchProfileFromIPFS } from '../utils/ipfs';
 
 function PostJob() {
-    const { isConnected } = useAccount();
+    const { address, isConnected } = useAccount();
+    const [profile, setProfile] = useState(null);
     const [description, setDescription] = useState('');
     const [amount, setAmount] = useState('');
+
+    useEffect(() => {
+        if (address) {
+            fetchProfileFromIPFS(address).then(data => setProfile(data));
+        }
+    }, [address]);
 
     const {
         data: hash,
@@ -20,6 +29,16 @@ function PostJob() {
         isLoading: isConfirming,
         isSuccess: isConfirmed,
     } = useWaitForTransactionReceipt({ hash });
+
+    useEffect(() => {
+        if (isConfirming) {
+            toast.loading('Locking payment in escrow...', { id: 'jobPostTx' });
+        } else if (isConfirmed) {
+            toast.success('Payment locked securely!', { id: 'jobPostTx' });
+        } else if (writeError) {
+            toast.error(writeError.shortMessage || 'Transaction failed', { id: 'jobPostTx' });
+        }
+    }, [isConfirming, isConfirmed, writeError]);
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -43,15 +62,24 @@ function PostJob() {
     return (
         <div className="space-y-8 animate-fade-in">
             {/* Hero text */}
-            <div className="pt-4">
-                <h1 className="font-antigravity text-4xl md:text-5xl text-tx-primary mb-3">
-                    Pay instantly.
-                    <br />
-                    Build trust.
-                </h1>
-                <p className="text-tx-secondary text-base max-w-md">
-                    Post a micro-job, lock payment in escrow, and let the blockchain handle the rest.
-                </p>
+            <div className="pt-4 flex justify-between items-start">
+                <div>
+                    <h1 className="font-antigravity text-4xl md:text-5xl text-tx-primary mb-3">
+                        Pay instantly.
+                        <br />
+                        Build trust.
+                    </h1>
+                    <p className="text-tx-secondary text-base max-w-md">
+                        Post a micro-job, lock payment in escrow, and let the blockchain handle the rest.
+                    </p>
+                </div>
+                {profile && (
+                    <img
+                        src={profile.avatar}
+                        alt="User avatar"
+                        className="w-10 h-10 rounded-full border border-border bg-white"
+                    />
+                )}
             </div>
 
             {/* Success state */}

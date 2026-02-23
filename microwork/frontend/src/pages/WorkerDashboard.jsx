@@ -1,14 +1,24 @@
+import { useEffect, useState } from 'react';
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { formatEther } from 'viem';
+import toast from 'react-hot-toast';
 import {
     ESCROW_ADDRESS, ESCROW_ABI,
     REPUTATION_NFT_ADDRESS, REPUTATION_NFT_ABI,
     JOB_STATUS,
 } from '../constants/contracts';
 import { SkeletonCard, SkeletonScore } from '../components/Skeleton';
+import { fetchProfileFromIPFS } from '../utils/ipfs';
 
 function WorkerDashboard() {
     const { address, isConnected } = useAccount();
+    const [profile, setProfile] = useState(null);
+
+    useEffect(() => {
+        if (address) {
+            fetchProfileFromIPFS(address).then(data => setProfile(data));
+        }
+    }, [address]);
 
     // Read worker reputation
     const { data: jobCount, isLoading: isLoadingRep } = useReadContract({
@@ -42,11 +52,24 @@ function WorkerDashboard() {
 
     return (
         <div className="space-y-6 animate-fade-in">
-            {/* Header */}
-            <div className="pt-2">
+            {/* Header & Worker Profile */}
+            <div className="pt-2 flex items-center justify-between">
                 <h1 className="font-antigravity text-3xl md:text-4xl text-tx-primary">
                     Your Dashboard
                 </h1>
+                {profile && (
+                    <div className="flex items-center gap-3">
+                        <div className="text-right hidden sm:block">
+                            <p className="text-sm font-semibold">{profile.name}</p>
+                            <p className="text-xs text-tx-tertiary">{profile.skills.join(' • ')}</p>
+                        </div>
+                        <img
+                            src={profile.avatar}
+                            alt="avatar"
+                            className="w-12 h-12 rounded-full border border-border bg-white"
+                        />
+                    </div>
+                )}
             </div>
 
             {/* Reputation Score Card */}
@@ -131,8 +154,20 @@ function JobCard({ jobId, userAddress }) {
         isPending: isConfirming,
     } = useWriteContract();
 
-    const { isLoading: isAcceptTxLoading } = useWaitForTransactionReceipt({ hash: acceptHash });
-    const { isLoading: isConfirmTxLoading } = useWaitForTransactionReceipt({ hash: confirmHash });
+    const { isLoading: isAcceptTxLoading, isSuccess: isAcceptSuccess, error: acceptError } = useWaitForTransactionReceipt({ hash: acceptHash });
+    const { isLoading: isConfirmTxLoading, isSuccess: isConfirmSuccess, error: confirmError } = useWaitForTransactionReceipt({ hash: confirmHash });
+
+    useEffect(() => {
+        if (isAcceptTxLoading) toast.loading('Accepting job...', { id: `accept-${jobId}` });
+        else if (isAcceptSuccess) toast.success('Job accepted!', { id: `accept-${jobId}` });
+        else if (acceptError) toast.error('Failed to accept', { id: `accept-${jobId}` });
+    }, [isAcceptTxLoading, isAcceptSuccess, acceptError, jobId]);
+
+    useEffect(() => {
+        if (isConfirmTxLoading) toast.loading('Confirming completion...', { id: `confirm-${jobId}` });
+        else if (isConfirmSuccess) toast.success('Completion confirmed!', { id: `confirm-${jobId}` });
+        else if (confirmError) toast.error('Failed to confirm', { id: `confirm-${jobId}` });
+    }, [isConfirmTxLoading, isConfirmSuccess, confirmError, jobId]);
 
     if (isLoading) return <SkeletonCard />;
     if (!job) return null;
@@ -226,8 +261,8 @@ function Pill({ filled, label }) {
     return (
         <div
             className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition-colors ${filled
-                    ? 'bg-accent-green/10 border-accent-green/30 text-accent-green'
-                    : 'bg-bg-subtle border-border text-tx-tertiary'
+                ? 'bg-accent-green/10 border-accent-green/30 text-accent-green'
+                : 'bg-bg-subtle border-border text-tx-tertiary'
                 }`}
             title={`${label} ${filled ? 'confirmed' : 'pending'}`}
         >

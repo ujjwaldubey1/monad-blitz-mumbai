@@ -2,18 +2,18 @@
 pragma solidity ^0.8.24;
 
 import "./interfaces/IReputationNFT.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title MicroWorkEscrow
  * @dev Core escrow contract for the MicroWork platform.
  *      Client locks payment → worker accepts → both confirm → payment releases + reputation NFT mints.
  *
- *      Job lifecycle:  Open → InProgress → Completed
- *                         ↘ Disputed (either party can flag)
+ *      Added: ReentrancyGuard, Arbiter Role, Pull-over-Push Payments
  */
-contract MicroWorkEscrow {
+contract MicroWorkEscrow is ReentrancyGuard {
     // ---- Enums ----
-    enum JobStatus { Open, InProgress, Completed, Disputed }
+    enum JobStatus { Open, InProgress, Completed, Disputed, Resolved }
 
     // ---- Structs ----
     struct Job {
@@ -30,9 +30,11 @@ contract MicroWorkEscrow {
     // ---- State ----
     uint256 private _nextJobId;
     address public owner;
+    address public arbiter; // The role that can resolve disputed jobs
     IReputationNFT public reputationNFT;
 
     mapping(uint256 => Job) public jobs;
+    mapping(address => uint256) public balances; // Pull-over-push withdrawals
 
     // ---- Events ----
     event JobCreated(uint256 indexed jobId, address indexed client, uint256 payment, string description);
@@ -40,8 +42,11 @@ contract MicroWorkEscrow {
     event CompletionConfirmed(uint256 indexed jobId, address indexed confirmer, string role);
     event JobCompleted(uint256 indexed jobId, address indexed worker, uint256 payment);
     event JobDisputed(uint256 indexed jobId, address indexed disputer);
+    event JobResolved(uint256 indexed jobId, address winner, uint256 payment);
     event JobCancelled(uint256 indexed jobId);
     event ReputationNFTUpdated(address indexed nft);
+    event ArbiterUpdated(address indexed oldArbiter, address indexed newArbiter);
+    event Withdrawn(address indexed user, uint256 amount);
 
     // ---- Modifiers ----
     modifier onlyOwner() {
@@ -49,24 +54,34 @@ contract MicroWorkEscrow {
         _;
     }
 
+    modifier onlyArbiter() {
+        require(msg.sender == arbiter, "Escrow: not arbiter");
+        _;
+    }
+
     // ---- Constructor ----
     constructor() {
         owner = msg.sender;
+        arbiter = msg.sender; // By default owner is arbiter
     }
 
     // ---- Admin ----
 
-    /// @notice Set the ReputationNFT contract address. Call this after deploying ReputationNFT.
     function setReputationNFT(address _nft) external onlyOwner {
         require(_nft != address(0), "Escrow: zero address");
         reputationNFT = IReputationNFT(_nft);
         emit ReputationNFTUpdated(_nft);
     }
 
+    function setArbiter(address _arbiter) external onlyOwner {
+        require(_arbiter != address(0), "Escrow: zero address");
+        emit ArbiterUpdated(arbiter, _arbiter);
+        arbiter = _arbiter;
+    }
+
     // ---- Core ----
 
-    /// @notice Client creates a job and locks payment in escrow.
-    function createJob(string calldata _description) external payable {
+    function createJob(string calldata _description) external payable nonReentrant {
         require(msg.value > 0, "Escrow: payment must be > 0");
 
         uint256 jobId = _nextJobId++;
@@ -84,7 +99,6 @@ contract MicroWorkEscrow {
         emit JobCreated(jobId, msg.sender, msg.value, _description);
     }
 
-    /// @notice Worker accepts an open job.
     function acceptJob(uint256 _jobId) external {
         Job storage job = jobs[_jobId];
         require(job.status == JobStatus.Open, "Escrow: job not open");
@@ -96,8 +110,6 @@ contract MicroWorkEscrow {
         emit JobAccepted(_jobId, msg.sender);
     }
 
-    /// @notice Either client or worker confirms task completion.
-    ///         When BOTH confirm, payment is released and a reputation NFT is minted.
     function confirmCompletion(uint256 _jobId) external {
         Job storage job = jobs[_jobId];
         require(job.status == JobStatus.InProgress, "Escrow: job not in progress");
@@ -106,7 +118,6 @@ contract MicroWorkEscrow {
             "Escrow: not a party to this job"
         );
 
-        // Record who confirmed
         if (msg.sender == job.client) {
             require(!job.clientConfirmed, "Escrow: client already confirmed");
             job.clientConfirmed = true;
@@ -117,15 +128,12 @@ contract MicroWorkEscrow {
             emit CompletionConfirmed(_jobId, msg.sender, "worker");
         }
 
-        // If both confirmed → release payment + mint reputation
         if (job.clientConfirmed && job.workerConfirmed) {
             job.status = JobStatus.Completed;
 
-            // Transfer payment to worker
-            (bool sent, ) = job.worker.call{value: job.payment}("");
-            require(sent, "Escrow: payment transfer failed");
+            // Pull-over-push: add to worker's balance
+            balances[job.worker] += job.payment;
 
-            // Mint reputation NFT
             if (address(reputationNFT) != address(0)) {
                 reputationNFT.mint(job.worker, _jobId);
             }
@@ -134,7 +142,6 @@ contract MicroWorkEscrow {
         }
     }
 
-    /// @notice Either party can flag a dispute.
     function disputeJob(uint256 _jobId) external {
         Job storage job = jobs[_jobId];
         require(job.status == JobStatus.InProgress, "Escrow: job not in progress");
@@ -147,27 +154,56 @@ contract MicroWorkEscrow {
         emit JobDisputed(_jobId, msg.sender);
     }
 
-    /// @notice Client cancels an open job and gets a refund.
+    /// @notice Arbiter resolves the dispute
+    function resolveDispute(uint256 _jobId, bool _favorWorker) external onlyArbiter {
+        Job storage job = jobs[_jobId];
+        require(job.status == JobStatus.Disputed, "Escrow: job not disputed");
+        
+        job.status = JobStatus.Resolved;
+        
+        address winner = _favorWorker ? job.worker : job.client;
+        balances[winner] += job.payment;
+
+        // Optionally mint reputation if worker won
+        if (_favorWorker && address(reputationNFT) != address(0)) {
+            reputationNFT.mint(job.worker, _jobId);
+        }
+
+        emit JobResolved(_jobId, winner, job.payment);
+    }
+
     function cancelJob(uint256 _jobId) external {
         Job storage job = jobs[_jobId];
         require(job.client == msg.sender, "Escrow: not the client");
         require(job.status == JobStatus.Open, "Escrow: can only cancel open jobs");
 
-        job.status = JobStatus.Disputed; // reuse Disputed as terminal state
-        (bool sent, ) = msg.sender.call{value: job.payment}("");
-        require(sent, "Escrow: refund failed");
+        job.status = JobStatus.Disputed; // Reuse Disputed as terminal state for cancelled
+        
+        // Pull-over-push instead of direct call
+        balances[msg.sender] += job.payment;
 
         emit JobCancelled(_jobId);
     }
 
+    /// @notice Workers and clients withdraw available funds securely
+    function withdraw() external nonReentrant {
+        uint256 amount = balances[msg.sender];
+        require(amount > 0, "Escrow: no balance to withdraw");
+
+        balances[msg.sender] = 0;
+        
+        (bool sent, ) = msg.sender.call{value: amount}("");
+        require(sent, "Escrow: withdrawal failed");
+        
+        emit Withdrawn(msg.sender, amount);
+    }
+
     // ---- Views ----
 
-    /// @notice Get job details.
     function getJob(uint256 _jobId) external view returns (Job memory) {
         return jobs[_jobId];
     }
 
-    /// @notice Total number of jobs created.
     function totalJobs() external view returns (uint256) {
         return _nextJobId;
     }
